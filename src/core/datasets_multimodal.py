@@ -217,7 +217,7 @@ class MMIMDbDataModule(pl.LightningDataModule):
         if not self._load_prepared_manifest():
             raise FileNotFoundError(
                 f"Missing prepared MMIMDb manifest at {self._prepared_manifest_path()}. "
-                "Run src.data_prep.prepare_mmimdb_binary first."
+                "Run src.core.prepare_mmimdb_binary first."
             )
 
     def _make_base_dataset(self, indices: list[int]) -> Dataset:
