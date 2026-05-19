@@ -1,5 +1,6 @@
 torch
 pandas
+datasets
 pytorch-lightning
 transformers
 torchvision
@@ -9,3 +10,4 @@ packaging
 matplotlib
 umap-learn
 optuna
+scikit-learn
