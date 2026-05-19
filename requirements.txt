@@ -1,0 +1,11 @@
+torch
+pandas
+pytorch-lightning
+transformers
+torchvision
+Pillow
+numpy
+packaging
+matplotlib
+umap-learn
+optuna
