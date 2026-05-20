@@ -32,3 +32,5 @@ logs/
 checkpoints/
 outputs/
 slurm/
+perturb
+src/figures/paper_figures.py
