@@ -25,12 +25,7 @@ The repo is currently undergoing construction. Stay tuned for more updates!
 ---
 
 ## Supported Datasets & Encoders
-- `mnist`
-- `shapes`
-- `chestxray`
-- `imdb`
-- `mmimdb`
-
+- `mnist`, `shapes`, `chestxray`, `imdb`, `mmimdb`
 - Vision: `resnet50`, `vit`, `dinov2`
 - Text: `distilbert`, `bert`, `roberta`
 - Multimodal: `clip`, `siglip2`
