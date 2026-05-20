@@ -198,13 +198,3 @@ python -m src.analysis.main \
   --svm-c 1.0 \
   --task svm_probe
 ```
----
-
-## Outputs
-Most workflows in this repo produce JSON artifacts. These typically include:
-
-- experiment metadata
-- dataset and encoder identity
-- summary metrics
-- raw example-level results
-- references to saved checkpoints or cached embeddings
