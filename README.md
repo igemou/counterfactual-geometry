@@ -1,22 +1,16 @@
 # A Geometric View of Counterfactual Behavior: Interaction of Boundary Proximity and Local Support
 
 This repository contains the code for studying how counterfactual behavior depends on the interaction between decision-boundary proximity and local data support in learned representation spaces.
-
 The project evaluates frozen pretrained encoders, linear classifier heads, and standardized local counterfactual search across vision, language, and multimodal settings. It also includes post hoc analyses and figure-generation utilities used for the paper.
 
 ![Overview](docs/overview.png)
 Counterfactual behavior is shaped by boundary proximity and local support: given a representation, the code measures whether prediction-changing perturbations are reachable, how far they must move, and whether they terminate in target regions supported by nearby data.
 
-[🖼️ Overview Figure](docs/overview.png)
-
 ---
 
-## Highlights
-- Studies counterfactual behavior as a geometric property of learned representations.
-- Separates representation effects from classifier-boundary effects using frozen embeddings and retrained linear heads.
-- Supports unimodal and multimodal experiments across MNIST, Shapes, ChestXray, IMDb, and MM-IMDb.
-- Includes analysis pipelines for supported flips, geometry prediction, SVM comparison, density robustness, and optimization robustness.
-- Produces JSON outputs that can be reused for downstream plots and case studies.
+## News
+
+The repo is currently undergoing construction. Stay tuned for more updates!
 
 ---
 
@@ -30,14 +24,13 @@ Counterfactual behavior is shaped by boundary proximity and local support: given
 
 ---
 
-## Supported Datasets
+## Supported Datasets & Encoders
 - `mnist`
 - `shapes`
 - `chestxray`
 - `imdb`
 - `mmimdb`
 
-## Supported Encoders
 - Vision: `resnet50`, `vit`, `dinov2`
 - Text: `distilbert`, `bert`, `roberta`
 - Multimodal: `clip`, `siglip2`
