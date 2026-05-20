@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import torch
-from ..core.geometry import choose_target_label, estimate_local_geometry
+from ..core.geometry import choose_target_label, decision_margin, estimate_local_geometry, untargeted_decision_margin
 from ..core.utils import ensure_2d, mean_std
 from .search import build_baseline_config, generate_counterfactual, target_density
 
@@ -41,12 +41,15 @@ def evaluate_single_example(
         logits = classifier_head(ensure_2d(z)).squeeze(0)
         predicted_label = int(torch.argmax(logits).item())
         target_label = None
+        initial_margin = float("-inf")
         if logits.numel() > 1 and counterfactual_mode == "targeted":
             target_label = choose_target_label(logits, strategy=target_strategy)
+            initial_margin = decision_margin(logits, predicted_label, target_label)
         elif logits.numel() > 1:
             competitor_logits = logits.clone()
             competitor_logits[predicted_label] = -torch.inf
             target_label = int(torch.argmax(competitor_logits).item())
+            initial_margin, _ = untargeted_decision_margin(logits, predicted_label)
 
     geometry_stats = estimate_local_geometry(
         z=z,
@@ -82,7 +85,7 @@ def evaluate_single_example(
         **geometry_stats,
         "counterfactual_distance": search_result.distance,
         "counterfactual_margin": search_result.margin,
-        "decision_margin": search_result.margin,
+        "decision_margin": initial_margin,
         "optimization_effort": search_result.optimization_effort,
         "counterfactual_success": search_result.success,
         "start_label": search_result.start_label,

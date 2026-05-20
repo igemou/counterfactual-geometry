@@ -179,11 +179,18 @@ def _build_datamodule_for_experiment(
     return build_datamodule(dataset_name, **kwargs)
 
 
-def _checkpoint_stem(dataset_name: str, encoder_name: str, encoder_model_name: str | None = None) -> str:
+def _checkpoint_stem(
+    dataset_name: str,
+    encoder_name: str,
+    encoder_model_name: str | None = None,
+    seed: int | None = None,
+) -> str:
     stem = f"{dataset_name}_{encoder_name}"
     if encoder_model_name:
         safe_model_name = encoder_model_name.replace('/', '_')
         stem = f"{stem}_{safe_model_name}"
+    if seed is not None:
+        stem = f"{stem}_seed{seed}"
     return stem
 
 
@@ -200,7 +207,7 @@ def save_probe_checkpoint(
 ) -> Path:
     checkpoint_dir = Path(checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = checkpoint_dir / f"{_checkpoint_stem(dataset_name, encoder_name, encoder_model_name)}_probe.pt"
+    checkpoint_path = checkpoint_dir / f"{_checkpoint_stem(dataset_name, encoder_name, encoder_model_name, seed=seed)}_probe.pt"
     payload = {
         "classifier_state_dict": classifier_head.state_dict(),
         "dataset": dataset_name,

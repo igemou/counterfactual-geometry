@@ -206,6 +206,13 @@ def run_multimodal_encoder_comparison(
         image_encoder_name = image_encoder_name or str(metadata.get("image_encoder", "") or "") or None
         text_encoder_name = text_encoder_name or str(metadata.get("text_encoder", "") or "") or None
         multimodal_encoder_name = multimodal_encoder_name or str(metadata.get("multimodal_encoder", "") or "") or None
+        image_encoder_model_name = image_encoder_model_name or str(metadata.get("image_encoder_model_name", "") or "") or None
+        text_encoder_model_name = text_encoder_model_name or str(metadata.get("text_encoder_model_name", "") or "") or None
+        multimodal_encoder_model_name = (
+            multimodal_encoder_model_name
+            or str(metadata.get("multimodal_encoder_model_name", "") or "")
+            or None
+        )
         checkpoint_projection_dim = metadata.get("projection_dim")
         if checkpoint_projection_dim is not None:
             fusion_projection_dim = int(checkpoint_projection_dim)
@@ -384,16 +391,20 @@ def run_multimodal_encoder_comparison(
         output["probe_checkpoint"] = str(probe_checkpoint)
     elif save_probe_dir is not None:
         encoder_key = image_encoder_name if canonical_representation == "image" else text_encoder_name
+        encoder_model_key = image_encoder_model_name if canonical_representation == "image" else text_encoder_model_name
         if canonical_representation == "fused":
             encoder_key = f"{image_encoder_name}_{text_encoder_name}_fused"
+            encoder_model_parts = [part for part in (image_encoder_model_name, text_encoder_model_name) if part]
+            encoder_model_key = "__".join(encoder_model_parts) if encoder_model_parts else None
         elif canonical_representation == "multimodal":
             encoder_key = multimodal_encoder_name
+            encoder_model_key = multimodal_encoder_model_name
         checkpoint_path = save_probe_checkpoint(
             classifier_head=classifier_head,
             checkpoint_dir=save_probe_dir,
             dataset_name="mmimdb",
             encoder_name=str(encoder_key),
-            encoder_model_name=None,
+            encoder_model_name=encoder_model_key,
             seed=seed,
             input_dim=train_embeddings.size(1),
             num_classes=datamodule.num_classes,
@@ -402,6 +413,9 @@ def run_multimodal_encoder_comparison(
                 "image_encoder": image_encoder_name or "",
                 "text_encoder": text_encoder_name or "",
                 "multimodal_encoder": multimodal_encoder_name or "",
+                "image_encoder_model_name": image_encoder_model_name or "",
+                "text_encoder_model_name": text_encoder_model_name or "",
+                "multimodal_encoder_model_name": multimodal_encoder_model_name or "",
                 "projection_dim": projection_dim,
                 "probe_lr": probe_lr,
                 "probe_weight_decay": probe_weight_decay,
