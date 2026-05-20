@@ -10,7 +10,7 @@ import torch
 
 from ..core.classifier import build_classifier, train_linear_probe
 from ..counterfactuals.evaluation import evaluate_embeddings
-from ..core.utils import load_probe, set_seed
+from ..core.utils import configure_runtime_paths, load_probe, set_seed
 from ..core.encoders import build_processor
 from .common import MULTIMODAL_BACKBONES, TEXT_BACKBONES, VISION_BACKBONES, build_multimodal_datamodule, load_multimodal_split_embeddings
 
@@ -114,7 +114,15 @@ def run_multimodal_classifier_head_variation(
     intervention_probe_lrs: list[float] | None = None,
     intervention_probe_weight_decays: list[float] | None = None,
     intervention_probe_epochs: int = 100,
+    data_dir: str | Path | None = None,
+    embedding_cache_root: str | Path | None = None,
+    hf_cache_dir: str | Path | None = None,
 ) -> dict[str, Any]:
+    configure_runtime_paths(
+        data_dir=data_dir,
+        embedding_cache_root=embedding_cache_root,
+        hf_cache_dir=hf_cache_dir,
+    )
     representation = representation.lower()
     if representation == "fused":
         if image_encoder_name not in VISION_BACKBONES or text_encoder_name not in TEXT_BACKBONES:
@@ -149,6 +157,7 @@ def run_multimodal_classifier_head_variation(
         representation=representation,
         batch_size=batch_size,
         num_workers=num_workers,
+        data_dir=data_dir,
         image_encoder_name=image_encoder_name,
         text_processor=text_processor,
     )
@@ -170,6 +179,7 @@ def run_multimodal_classifier_head_variation(
         image_encoder_model_name=image_encoder_model_name,
         text_encoder_model_name=text_encoder_model_name,
         multimodal_encoder_model_name=multimodal_encoder_model_name,
+        embedding_cache_root=embedding_cache_root,
         text_processor=text_processor,
     )
 
@@ -382,6 +392,9 @@ def main() -> None:
     parser.add_argument("--intervention-probe-lr", action="append", default=None)
     parser.add_argument("--intervention-probe-weight-decay", action="append", default=None)
     parser.add_argument("--intervention-probe-epochs", type=int, default=100)
+    parser.add_argument("--data-dir", type=Path, default=None)
+    parser.add_argument("--embedding-cache-root", type=Path, default=None)
+    parser.add_argument("--hf-cache-dir", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
@@ -410,6 +423,9 @@ def main() -> None:
         intervention_probe_lrs=_parse_float_list(args.intervention_probe_lr, default=[]),
         intervention_probe_weight_decays=_parse_float_list(args.intervention_probe_weight_decay, default=[]),
         intervention_probe_epochs=args.intervention_probe_epochs,
+        data_dir=args.data_dir,
+        embedding_cache_root=args.embedding_cache_root,
+        hf_cache_dir=args.hf_cache_dir,
     )
 
     payload = json.dumps(output, indent=2, sort_keys=True)

@@ -10,7 +10,7 @@ import torch
 
 from ..core.classifier import build_classifier, train_linear_probe
 from ..counterfactuals.evaluation import evaluate_embeddings
-from ..core.utils import embedding_cache_path, load_probe, set_seed
+from ..core.utils import configure_runtime_paths, embedding_cache_path, load_probe, set_seed
 from .common import copy_split_to_device, resolve_device
 
 
@@ -83,8 +83,9 @@ def _load_split_embeddings(
     encoder_name: str,
     encoder_model_name: str | None,
     split: str,
+    embedding_cache_root: str | Path | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    cache_path = embedding_cache_path(dataset_name, encoder_name, encoder_model_name, split)
+    cache_path = embedding_cache_path(dataset_name, encoder_name, encoder_model_name, split, root=embedding_cache_root)
     payload = torch.load(cache_path, map_location="cpu")
     embeddings = payload.get("embeddings")
     labels = payload.get("labels")
@@ -114,7 +115,15 @@ def run_unimodal_classifier_head_variation(
     intervention_probe_lrs: list[float] | None = None,
     intervention_probe_weight_decays: list[float] | None = None,
     intervention_probe_epochs: int = 100,
+    data_dir: str | Path | None = None,
+    embedding_cache_root: str | Path | None = None,
+    hf_cache_dir: str | Path | None = None,
 ) -> dict[str, Any]:
+    configure_runtime_paths(
+        data_dir=data_dir,
+        embedding_cache_root=embedding_cache_root,
+        hf_cache_dir=hf_cache_dir,
+    )
     set_seed(seed)
     resolved_device = resolve_device(device)
 
@@ -140,6 +149,7 @@ def run_unimodal_classifier_head_variation(
             encoder_name=encoder_name,
             encoder_model_name=inferred_model_name,
             split=split,
+            embedding_cache_root=embedding_cache_root,
         )
 
     train_embeddings, train_labels = split_to_embeddings["train"]
@@ -327,6 +337,9 @@ def main() -> None:
     parser.add_argument("--intervention-probe-lr", action="append", default=None)
     parser.add_argument("--intervention-probe-weight-decay", action="append", default=None)
     parser.add_argument("--intervention-probe-epochs", type=int, default=100)
+    parser.add_argument("--data-dir", type=Path, default=None)
+    parser.add_argument("--embedding-cache-root", type=Path, default=None)
+    parser.add_argument("--hf-cache-dir", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
@@ -351,6 +364,9 @@ def main() -> None:
         intervention_probe_lrs=_parse_float_list(args.intervention_probe_lr, []),
         intervention_probe_weight_decays=_parse_float_list(args.intervention_probe_weight_decay, []),
         intervention_probe_epochs=args.intervention_probe_epochs,
+        data_dir=args.data_dir,
+        embedding_cache_root=args.embedding_cache_root,
+        hf_cache_dir=args.hf_cache_dir,
     )
 
     print(json.dumps(output, indent=2, sort_keys=True))

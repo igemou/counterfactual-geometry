@@ -18,11 +18,6 @@ def data_root() -> Path:
     configured = os.environ.get("GEOMETRY_DATA_ROOT")
     if configured:
         return Path(configured).expanduser().resolve()
-
-    scratch_data = Path.home() / "scratch" / "data"
-    if scratch_data.exists():
-        return scratch_data.resolve()
-
     return project_root() / "data"
 
 
@@ -30,14 +25,24 @@ def hf_cache_root() -> Path | None:
     configured = os.environ.get("GEOMETRY_HF_CACHE") or os.environ.get("HF_HOME")
     if configured:
         path = Path(configured).expanduser().resolve()
-        if path.exists():
-            return path
-
-    scratch_cache = Path.home() / "scratch" / "hf_cache"
-    if scratch_cache.exists():
-        return scratch_cache.resolve()
-
+        return path
     return None
+
+
+def configure_runtime_paths(
+    *,
+    data_dir: str | Path | None = None,
+    embedding_cache_root: str | Path | None = None,
+    hf_cache_dir: str | Path | None = None,
+) -> None:
+    if data_dir is not None:
+        os.environ["GEOMETRY_DATA_ROOT"] = str(Path(data_dir).expanduser().resolve())
+    if embedding_cache_root is not None:
+        os.environ["GEOMETRY_EMBEDDING_CACHE_DIR"] = str(Path(embedding_cache_root).expanduser().resolve())
+    if hf_cache_dir is not None:
+        resolved = str(Path(hf_cache_dir).expanduser().resolve())
+        os.environ["GEOMETRY_HF_CACHE"] = resolved
+        os.environ["HF_HOME"] = resolved
 
 
 def _safe_cache_component(value: str | None, fallback: str) -> str:

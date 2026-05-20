@@ -71,6 +71,7 @@ def build_multimodal_datamodule(
     representation: str,
     batch_size: int,
     num_workers: int,
+    data_dir: str | Path | None = None,
     image_encoder_name: str | None = None,
     text_processor=None,
 ):
@@ -78,6 +79,8 @@ def build_multimodal_datamodule(
         "batch_size": batch_size,
         "num_workers": num_workers,
     }
+    if data_dir is not None:
+        kwargs["data_dir"] = Path(data_dir)
     if representation == "image":
         if image_encoder_name is not None and image_encoder_name.lower() in PROCESSOR_VISION_ENCODERS:
             kwargs["normalize"] = False
@@ -181,6 +184,7 @@ def load_multimodal_split_embeddings(
     image_encoder_model_name: str | None,
     text_encoder_model_name: str | None,
     multimodal_encoder_model_name: str | None,
+    embedding_cache_root: str | Path | None = None,
     text_processor=None,
 ) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
     split_to_embeddings: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
@@ -194,7 +198,7 @@ def load_multimodal_split_embeddings(
         from .unimodal_encoder_comparison import extract_embeddings
 
         for split, loader in split_loaders.items():
-            cache_path = embedding_cache_path("mmimdb", image_encoder_name, image_encoder_model_name, split)
+            cache_path = embedding_cache_path("mmimdb", image_encoder_name, image_encoder_model_name, split, root=embedding_cache_root)
             split_to_embeddings[split] = extract_embeddings(
                 loader,
                 encoder=image_encoder,
@@ -209,7 +213,7 @@ def load_multimodal_split_embeddings(
         from .unimodal_encoder_comparison import extract_embeddings
 
         for split, loader in split_loaders.items():
-            cache_path = embedding_cache_path("mmimdb", text_encoder_name, text_encoder_model_name, split)
+            cache_path = embedding_cache_path("mmimdb", text_encoder_name, text_encoder_model_name, split, root=embedding_cache_root)
             split_to_embeddings[split] = extract_embeddings(
                 loader,
                 encoder=text_encoder,
@@ -228,7 +232,7 @@ def load_multimodal_split_embeddings(
 
         for split, loader in split_loaders.items():
             model_key = f"{image_encoder_name}-{text_encoder_name}"
-            cache_path = embedding_cache_path("mmimdb_fused", model_key, None, split)
+            cache_path = embedding_cache_path("mmimdb_fused", model_key, None, split, root=embedding_cache_root)
             split_to_embeddings[split] = extract_fused_embeddings(
                 loader,
                 image_encoder=image_encoder,
@@ -251,7 +255,7 @@ def load_multimodal_split_embeddings(
     from .unimodal_encoder_comparison import extract_embeddings
 
     for split, loader in split_loaders.items():
-        cache_path = embedding_cache_path("mmimdb_multimodal", multimodal_encoder_name, multimodal_encoder_model_name, split)
+        cache_path = embedding_cache_path("mmimdb_multimodal", multimodal_encoder_name, multimodal_encoder_model_name, split, root=embedding_cache_root)
         split_to_embeddings[split] = extract_embeddings(
             loader,
             encoder=multimodal_encoder,

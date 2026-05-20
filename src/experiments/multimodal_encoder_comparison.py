@@ -13,7 +13,7 @@ from .unimodal_encoder_comparison import (
     save_probe_checkpoint,
 )
 from ..core.geometry import dataset_density_scale
-from ..core.utils import load_probe, set_seed
+from ..core.utils import configure_runtime_paths, load_probe, set_seed
 from .common import (
     EncodedLinearHead,
     MULTIMODAL_BACKBONES,
@@ -46,6 +46,9 @@ def run_multimodal_suite(
     fusion_projection_dim: int | None = None,
     save_probe_dir: Path | None = None,
     max_examples: int | None = None,
+    data_dir: str | Path | None = None,
+    embedding_cache_root: str | Path | None = None,
+    hf_cache_dir: str | Path | None = None,
 ) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, str]] = []
@@ -63,6 +66,9 @@ def run_multimodal_suite(
             probe_weight_decay=probe_weight_decay,
             max_examples=max_examples,
             save_probe_dir=save_probe_dir,
+            data_dir=data_dir,
+            embedding_cache_root=embedding_cache_root,
+            hf_cache_dir=hf_cache_dir,
         )
         output_path = suite_output_path(output_dir, "image", image_encoder, None)
         output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n")
@@ -81,6 +87,9 @@ def run_multimodal_suite(
             probe_weight_decay=probe_weight_decay,
             max_examples=max_examples,
             save_probe_dir=save_probe_dir,
+            data_dir=data_dir,
+            embedding_cache_root=embedding_cache_root,
+            hf_cache_dir=hf_cache_dir,
         )
         output_path = suite_output_path(output_dir, "text", None, text_encoder)
         output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n")
@@ -99,6 +108,9 @@ def run_multimodal_suite(
             probe_weight_decay=probe_weight_decay,
             max_examples=max_examples,
             save_probe_dir=save_probe_dir,
+            data_dir=data_dir,
+            embedding_cache_root=embedding_cache_root,
+            hf_cache_dir=hf_cache_dir,
         )
         output_path = suite_output_path(output_dir, "multimodal", None, None, multimodal_encoder)
         output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n")
@@ -120,6 +132,9 @@ def run_multimodal_suite(
                 probe_weight_decay=probe_weight_decay,
                 max_examples=max_examples,
                 save_probe_dir=save_probe_dir,
+                data_dir=data_dir,
+                embedding_cache_root=embedding_cache_root,
+                hf_cache_dir=hf_cache_dir,
             )
             output_path = suite_output_path(output_dir, "fused", image_encoder, text_encoder)
             output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n")
@@ -163,7 +178,15 @@ def run_multimodal_encoder_comparison(
     max_trajectory_points: int = 10,
     save_probe_dir: str | Path | None = None,
     probe_checkpoint: str | Path | None = None,
+    data_dir: str | Path | None = None,
+    embedding_cache_root: str | Path | None = None,
+    hf_cache_dir: str | Path | None = None,
 ) -> dict[str, object]:
+    configure_runtime_paths(
+        data_dir=data_dir,
+        embedding_cache_root=embedding_cache_root,
+        hf_cache_dir=hf_cache_dir,
+    )
     requested_representation = representation.lower()
     if requested_representation not in REPRESENTATIONS:
         raise ValueError(f"Unsupported representation: {requested_representation}")
@@ -209,6 +232,7 @@ def run_multimodal_encoder_comparison(
         representation=canonical_representation,
         batch_size=batch_size,
         num_workers=num_workers,
+        data_dir=data_dir,
         image_encoder_name=image_encoder_name,
         text_processor=text_processor if canonical_representation == "text" else None,
     )
@@ -230,6 +254,7 @@ def run_multimodal_encoder_comparison(
         image_encoder_model_name=image_encoder_model_name,
         text_encoder_model_name=text_encoder_model_name,
         multimodal_encoder_model_name=multimodal_encoder_model_name,
+        embedding_cache_root=embedding_cache_root,
         text_processor=text_processor,
     )
 
@@ -428,6 +453,9 @@ def main() -> None:
     parser.add_argument("--max-trajectory-points", type=int, default=10)
     parser.add_argument("--save-probe-dir", type=Path, default=None)
     parser.add_argument("--probe-checkpoint", type=Path, default=None)
+    parser.add_argument("--data-dir", type=Path, default=None)
+    parser.add_argument("--embedding-cache-root", type=Path, default=None)
+    parser.add_argument("--hf-cache-dir", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
@@ -459,6 +487,9 @@ def main() -> None:
         max_trajectory_points=args.max_trajectory_points,
         save_probe_dir=args.save_probe_dir,
         probe_checkpoint=args.probe_checkpoint,
+        data_dir=args.data_dir,
+        embedding_cache_root=args.embedding_cache_root,
+        hf_cache_dir=args.hf_cache_dir,
     )
 
     print(json.dumps(output, indent=2, sort_keys=True))

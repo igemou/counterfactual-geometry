@@ -11,7 +11,7 @@ from ..core.datasets import build_datamodule
 from ..core.encoders import build_encoder, build_processor, freeze_encoder, unpack_batch
 from ..counterfactuals.evaluation import evaluate_embeddings
 from ..core.geometry import dataset_density_scale
-from ..core.utils import embedding_cache_path, set_seed, to_device
+from ..core.utils import configure_runtime_paths, embedding_cache_path, set_seed, to_device
 from .common import (
     PROCESSOR_VISION_ENCODERS,
     TORCHVISION_VISION_ENCODERS,
@@ -149,6 +149,7 @@ def _build_datamodule_for_experiment(
     encoder_name: str,
     batch_size: int,
     num_workers: int,
+    data_dir: str | Path | None = None,
     text_processor=None,
 ):
     kwargs = {
@@ -171,6 +172,9 @@ def _build_datamodule_for_experiment(
         kwargs["tokenizer"] = text_processor
     elif lowered_encoder in PROCESSOR_VISION_ENCODERS:
         kwargs["normalize"] = False
+
+    if data_dir is not None:
+        kwargs["data_dir"] = Path(data_dir)
 
     return build_datamodule(dataset_name, **kwargs)
 
@@ -231,8 +235,16 @@ def run_unimodal_encoder_comparison(
     max_steps: int = 500,
     trust_radius: float = 1.0,
     save_probe_dir: str | Path | None = None,
+    data_dir: str | Path | None = None,
+    embedding_cache_root: str | Path | None = None,
+    hf_cache_dir: str | Path | None = None,
 ) -> dict[str, float | str | int]:
     _validate_dataset_encoder_pair(dataset_name, encoder_name)
+    configure_runtime_paths(
+        data_dir=data_dir,
+        embedding_cache_root=embedding_cache_root,
+        hf_cache_dir=hf_cache_dir,
+    )
     set_seed(seed)
     resolved_device = resolve_device(device)
 
@@ -245,6 +257,7 @@ def run_unimodal_encoder_comparison(
         encoder_name=encoder_name,
         batch_size=batch_size,
         num_workers=num_workers,
+        data_dir=data_dir,
         text_processor=text_processor,
     )
     datamodule.setup(None)
@@ -260,7 +273,7 @@ def run_unimodal_encoder_comparison(
     if getattr(encoder, "uses_processor", False):
         image_processor = build_processor(encoder_name, model_name=encoder_model_name)
 
-    train_cache_path = embedding_cache_path(dataset_name, encoder_name, encoder_model_name, "train")
+    train_cache_path = embedding_cache_path(dataset_name, encoder_name, encoder_model_name, "train", root=embedding_cache_root)
     train_embeddings, train_labels = extract_embeddings(
         datamodule.train_dataloader(),
         encoder=encoder,
@@ -268,7 +281,7 @@ def run_unimodal_encoder_comparison(
         processor=image_processor,
         cache_path=train_cache_path,
     )
-    val_cache_path = embedding_cache_path(dataset_name, encoder_name, encoder_model_name, "val")
+    val_cache_path = embedding_cache_path(dataset_name, encoder_name, encoder_model_name, "val", root=embedding_cache_root)
     val_embeddings, val_labels = extract_embeddings(
         datamodule.val_dataloader(),
         encoder=encoder,
@@ -276,7 +289,7 @@ def run_unimodal_encoder_comparison(
         processor=image_processor,
         cache_path=val_cache_path,
     )
-    test_cache_path = embedding_cache_path(dataset_name, encoder_name, encoder_model_name, "test")
+    test_cache_path = embedding_cache_path(dataset_name, encoder_name, encoder_model_name, "test", root=embedding_cache_root)
     test_embeddings, test_labels = extract_embeddings(
         datamodule.test_dataloader(),
         encoder=encoder,
@@ -419,6 +432,9 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=500)
     parser.add_argument("--trust-radius", type=float, default=1.0)
     parser.add_argument("--save-probe-dir", type=Path, default=None)
+    parser.add_argument("--data-dir", type=Path, default=None)
+    parser.add_argument("--embedding-cache-root", type=Path, default=None)
+    parser.add_argument("--hf-cache-dir", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
@@ -442,6 +458,9 @@ def main() -> None:
         max_steps=args.max_steps,
         trust_radius=args.trust_radius,
         save_probe_dir=args.save_probe_dir,
+        data_dir=args.data_dir,
+        embedding_cache_root=args.embedding_cache_root,
+        hf_cache_dir=args.hf_cache_dir,
     )
 
     print(json.dumps(output, indent=2, sort_keys=True))
