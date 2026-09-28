@@ -5,39 +5,12 @@ from typing import Callable, Optional
 
 import pytorch_lightning as pl
 import torch
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
-def make_weighted_sampler(
-    targets: list[int],
-    num_classes: Optional[int] = None,
-    eps: float = 1e-6,
-    seed: Optional[int] = None,
-) -> WeightedRandomSampler:
-    if not targets:
-        raise ValueError("targets must be non-empty")
-
-    if num_classes is None:
-        num_classes = int(max(targets)) + 1
-
-    counts = torch.bincount(torch.tensor(targets, dtype=torch.long), minlength=num_classes).float()
-    weights_per_class = 1.0 / (counts + eps)
-    sample_weights = weights_per_class[torch.tensor(targets, dtype=torch.long)]
-
-    generator = None
-    if seed is not None:
-        generator = torch.Generator()
-        generator.manual_seed(seed)
-
-    return WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(targets),
-        replacement=True,
-        generator=generator,
-    )
 
 
 def _dl_kwargs(num_workers: int) -> dict[str, object]:
@@ -78,7 +51,6 @@ class ImageFolderDataModule(pl.LightningDataModule):
         val_split: str = "val",
         test_split: str = "test",
         train_split: str = "train",
-        fallback_val_to_test: bool = False,
         seed: int = 42,
     ):
         super().__init__()
@@ -91,7 +63,6 @@ class ImageFolderDataModule(pl.LightningDataModule):
         self.val_split = val_split
         self.test_split = test_split
         self.train_split = train_split
-        self.fallback_val_to_test = fallback_val_to_test
         self.seed = seed
 
         self.transform = None
@@ -119,22 +90,10 @@ class ImageFolderDataModule(pl.LightningDataModule):
             if self.train_ds is None:
                 self.train_ds = self._load_imagefolder(self.train_split)
             if self.val_ds is None:
-                val_path = self._split_path(self.val_split)
-                if val_path.exists():
-                    self.val_ds = self._load_imagefolder(self.val_split)
-                elif self.fallback_val_to_test:
-                    self.val_ds = self._load_imagefolder(self.test_split)
-                else:
-                    raise FileNotFoundError(f"Missing validation split at {val_path}")
+                self.val_ds = self._load_imagefolder(self.val_split)
 
         if stage == "validate":
-            val_path = self._split_path(self.val_split)
-            if val_path.exists():
-                self.val_ds = self._load_imagefolder(self.val_split)
-            elif self.fallback_val_to_test:
-                self.val_ds = self._load_imagefolder(self.test_split)
-            else:
-                raise FileNotFoundError(f"Missing validation split at {val_path}")
+            self.val_ds = self._load_imagefolder(self.val_split)
 
         if stage in (None, "test"):
             if self.test_ds is None:

@@ -67,36 +67,6 @@ def _normalized_metrics(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _single_score(result: dict[str, Any]) -> float:
-    score = 0.0
-    score += 8.0 if result["success"] else 0.0
-    score += result["margin"]
-    score -= 0.35 * result["distance"]
-    score -= 0.02 * float(result["effort"])
-    score += 1.0 if result["trajectory_available"] else -5.0
-    return score
-
-
-def _contrast_score(results: list[dict[str, Any]]) -> float:
-    successes = [1.0 if row["success"] else 0.0 for row in results]
-    margins = [row["margin"] for row in results]
-    distances = [row["distance"] for row in results]
-    efforts = [float(row["effort"]) for row in results]
-    same_start = len({row["start_label"] for row in results}) == 1
-    same_target = len({row["target_label"] for row in results if row["target_label"] >= 0}) <= 1
-    any_missing_trajectory = any(not row["trajectory_available"] for row in results)
-    score = 0.0
-    score += 15.0 if min(successes) != max(successes) else 0.0
-    score += 3.0 if same_start else 0.0
-    score += 3.0 if same_target else 0.0
-    score += max(margins) - min(margins)
-    score += 0.05 * (max(efforts) - min(efforts))
-    score -= 0.1 * sum(distances) / max(len(distances), 1)
-    if any_missing_trajectory:
-        score -= 20.0
-    return score
-
-
 def select_case_studies(
     inputs: list[Path],
     *,
@@ -132,7 +102,7 @@ def select_case_studies(
                 continue
             if require_trajectory and not row["trajectory_available"]:
                 continue
-            candidates.append({"example_index": row["example_index"], "score": _single_score(row), "per_model": [{"model": payload["model"], **row}]})
+            candidates.append({"example_index": row["example_index"], "per_model": [{"model": payload["model"], **row}]})
     else:
         per_input = [{row["example_index"]: row for row in payload["raw_results"] if row["example_index"] >= 0} for payload in payloads]
         shared_indices = sorted(set.intersection(*(set(mapping.keys()) for mapping in per_input))) if per_input else []
@@ -150,11 +120,10 @@ def select_case_studies(
                 continue
             candidates.append({
                 "example_index": example_index,
-                "score": _contrast_score(rows),
                 "per_model": [{"model": payloads[idx]["model"], **rows[idx]} for idx in range(len(rows))],
             })
 
-    ranked = sorted(candidates, key=lambda row: row["score"], reverse=True)
+    ranked = sorted(candidates, key=lambda row: row["example_index"])
     return {
         "mode": current_mode,
         "inputs": [{"path": payload["path"], "dataset": payload["dataset"], "model": payload["model"]} for payload in payloads],
@@ -220,7 +189,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Case-study helpers for figure preparation.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    select_parser = subparsers.add_parser("select", help="Select strong case-study examples.")
+    select_parser = subparsers.add_parser("select", help="Filter case-study examples in dataset order.")
     select_parser.add_argument("--inputs", nargs="+", type=Path, required=True)
     select_parser.add_argument("--top-k", type=int, default=10)
     select_parser.add_argument("--mode", choices=["auto", "single", "contrast"], default="auto")

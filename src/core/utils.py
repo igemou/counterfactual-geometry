@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import math
 import os
+import subprocess
 import random
 import re
 from pathlib import Path
@@ -19,14 +22,6 @@ def data_root() -> Path:
     if configured:
         return Path(configured).expanduser().resolve()
     return project_root() / "data"
-
-
-def hf_cache_root() -> Path | None:
-    configured = os.environ.get("GEOMETRY_HF_CACHE") or os.environ.get("HF_HOME")
-    if configured:
-        path = Path(configured).expanduser().resolve()
-        return path
-    return None
 
 
 def configure_runtime_paths(
@@ -103,10 +98,6 @@ def set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def l2_distance(x: torch.Tensor, y: torch.Tensor) -> float:
-    return float(torch.norm(x - y, p=2).item())
-
-
 def mean_std(values: Iterable[float]) -> tuple[float, float]:
     tensor = torch.tensor(list(values), dtype=torch.float32)
     if tensor.numel() == 0:
@@ -116,8 +107,6 @@ def mean_std(values: Iterable[float]) -> tuple[float, float]:
 
 def load_probe_checkpoint(checkpoint_path: str | Path, map_location: str | torch.device = "cpu") -> dict:
     checkpoint = torch.load(Path(checkpoint_path), map_location=map_location)
-    if "classifier_state_dict" not in checkpoint:
-        raise ValueError(f"Checkpoint at {checkpoint_path} does not contain a classifier_state_dict")
     return checkpoint
 
 
@@ -132,3 +121,32 @@ def load_probe(checkpoint_path: str | Path, map_location: str | torch.device = "
     classifier.load_state_dict(checkpoint["classifier_state_dict"])
     classifier.eval()
     return classifier, checkpoint
+
+
+def json_safe(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k,v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    if isinstance(value, Path):
+        return str(value)
+    return value
+
+
+def write_json(path, payload):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(json_safe(payload), indent=2, allow_nan=False) + '\n')
+
+
+def run_provenance(paths, config):
+    try:
+        revision = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        revision = None
+    # Callers supply concrete input paths; no filesystem discovery is performed.
+    return {'git_revision': revision,
+            'inputs': [str(Path(p).resolve()) for p in paths],
+            'config': config}

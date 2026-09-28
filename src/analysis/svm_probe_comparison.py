@@ -1,21 +1,20 @@
 from __future__ import annotations
 
-import json
+from ..core.utils import write_json
+
 from pathlib import Path
 
 import torch
 from sklearn.svm import LinearSVC
 
 from ..core.utils import load_probe
-from .common import DATASET_ORDER, dataset_label, load_cached_split, load_json, main_experiment_paths, metric_value, model_label, spearman, split_cache_path, write_text
+from .common import DATASET_ORDER, load_cached_split, load_json, main_experiment_paths, all_intervention_paths, metric_value, model_label, spearman, split_cache_path
 
 
 def _linear_params_from_probe(probe) -> tuple[torch.Tensor, torch.Tensor]:
     layer = getattr(probe, "head", None)
     if layer is None:
         layer = getattr(probe, "linear", None)
-    if layer is None:
-        raise ValueError("Probe does not expose a final linear layer.")
     return layer.weight.detach().cpu().float(), layer.bias.detach().cpu().float()
 
 
@@ -51,10 +50,6 @@ def _center_linear_params(weight: torch.Tensor, bias: torch.Tensor) -> tuple[tor
     return centered_weight, centered_bias
 
 
-def _flatten_params(weight: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
-    return torch.cat([weight.reshape(-1), bias.reshape(-1)], dim=0)
-
-
 def _angle_degrees(
     probe_weight: torch.Tensor,
     probe_bias: torch.Tensor,
@@ -63,8 +58,8 @@ def _angle_degrees(
 ) -> float:
     probe_weight, probe_bias = _center_linear_params(probe_weight, probe_bias)
     svm_weight, svm_bias = _center_linear_params(svm_weight, svm_bias)
-    left = _flatten_params(probe_weight, probe_bias)
-    right = _flatten_params(svm_weight, svm_bias)
+    left = probe_weight.reshape(-1)
+    right = svm_weight.reshape(-1)
     denom = torch.norm(left) * torch.norm(right)
     if float(denom.item()) == 0.0:
         return 0.0
@@ -83,25 +78,29 @@ def _top2_margin(logits: torch.Tensor) -> torch.Tensor:
     return top2[:, 0] - top2[:, 1]
 
 
-def _margin_gap(probe_logits: torch.Tensor, svm_logits: torch.Tensor) -> float:
-    return float(torch.mean(torch.abs(_top2_margin(probe_logits) - _top2_margin(svm_logits))).item())
-
-
 def run_svm_probe_comparison(
     compare_dir: Path,
     cache_dir: Path,
     output_dir: Path,
     eval_split: str,
     svm_c: float,
+    interventions_dir: Path | None = None,
 ) -> dict[str, object]:
     rows: list[dict[str, object]] = []
-    for path in main_experiment_paths(compare_dir):
-        payload = load_json(path)
+    payloads = [load_json(path) for path in main_experiment_paths(compare_dir)]
+    if interventions_dir is not None:
+        for path in all_intervention_paths(interventions_dir):
+            family = load_json(path)
+            for variant in family.get("variants", []):
+                if not variant.get("probe_checkpoint"):
+                    raise ValueError("Head variants require saved checkpoints; rerun the head experiment")
+                payloads.append({**family, **variant, "variant_name": variant["name"]})
+    for payload in payloads:
         probe_checkpoint = payload.get("probe_checkpoint")
         if not probe_checkpoint:
             continue
         raw_train_embeddings, train_labels = load_cached_split(split_cache_path(payload, cache_dir, "train"))
-        raw_eval_embeddings, _ = load_cached_split(split_cache_path(payload, cache_dir, eval_split))
+        raw_eval_embeddings, eval_labels = load_cached_split(split_cache_path(payload, cache_dir, eval_split))
         probe, _ = load_probe(probe_checkpoint, map_location="cpu")
         probe.eval()
         probe_weight, probe_bias = _linear_params_from_probe(probe)
@@ -115,8 +114,9 @@ def run_svm_probe_comparison(
         rows.append({
             "dataset": str(payload.get("dataset", "")).lower(),
             "model": model_label(payload),
+            "variant": payload.get("variant_name", "encoder_baseline"),
             "weight_angle_deg": _angle_degrees(probe_weight, probe_bias, svm_weight, svm_bias),
-            "margin_gap": _margin_gap(probe_logits, svm_logits),
+            "margin_gap": float((signed_geometric_margins(eval_embeddings, probe_weight, probe_bias, eval_labels) - signed_geometric_margins(eval_embeddings, svm_weight, svm_bias, eval_labels)).mean()),
             "cf_suc": metric_value(payload, "counterfactual_success_mean"),
             "cf_dist": metric_value(payload, "counterfactual_distance_mean"),
         })
@@ -145,7 +145,17 @@ def run_svm_probe_comparison(
             ),
         })
     payload = {"rows": rows, "correlations": correlations, "config": {"eval_split": eval_split, "svm_c": svm_c}}
-    write_text(output_dir / "svm_probe_baseline.json", json.dumps(payload, indent=2) + "\n")
+    write_json(output_dir / "svm_probe_baseline.json", payload)
     return payload
 
 __all__ = ["run_svm_probe_comparison"]
+
+
+def signed_geometric_margins(embeddings, weight, bias, labels):
+    logits = embeddings @ weight.T + bias
+    competitor = logits.clone()
+    competitor[torch.arange(len(labels)), labels] = -torch.inf
+    other = competitor.argmax(1)
+    gap = logits[torch.arange(len(labels)), labels] - logits[torch.arange(len(labels)), other]
+    normal = (weight[labels] - weight[other]).norm(dim=1)
+    return gap / normal.clamp_min(1e-8)

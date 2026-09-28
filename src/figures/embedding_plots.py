@@ -7,42 +7,15 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
 import umap
 
 from ..analysis.common import load_cached_split, load_json, model_label, split_cache_path
 
 
-def _projection(
-    embeddings: np.ndarray,
-    method: str,
-    seed: int,
-    n_neighbors: int,
-    min_dist: float,
-    perplexity: float,
-    learning_rate: float | str,
-) -> np.ndarray:
-    if method == "pca":
-        return PCA(n_components=2, random_state=seed).fit_transform(embeddings)
-    if method == "tsne":
-        reducer = TSNE(
-            n_components=2,
-            random_state=seed,
-            init="pca",
-            perplexity=perplexity,
-            learning_rate=learning_rate,
-        )
-        return reducer.fit_transform(embeddings)
-    if method == "umap":
-        reducer = umap.UMAP(
-            n_components=2,
-            random_state=seed,
-            n_neighbors=n_neighbors,
-            min_dist=min_dist,
-        )
-        return reducer.fit_transform(embeddings)
-    raise ValueError(f"Unsupported method: {method}")
+def _projection(embeddings, seed, n_neighbors, min_dist):
+    reducer = umap.UMAP(n_components=2, random_state=seed, n_neighbors=n_neighbors,
+                        min_dist=min_dist, n_jobs=1)
+    return reducer.fit_transform(embeddings), reducer
 
 
 def _example_success_map(payload: dict[str, Any]) -> dict[int, bool]:
@@ -61,13 +34,10 @@ def plot_embedding_projection(
     output_path: Path,
     *,
     split: str | None = None,
-    method: str = "pca",
     seed: int = 0,
     max_points: int | None = 3000,
     n_neighbors: int = 15,
     min_dist: float = 0.1,
-    perplexity: float = 30.0,
-    learning_rate: float | str = "auto",
     highlight_success: bool = True,
 ) -> dict[str, Any]:
     projection_split = split or str(payload.get("eval_split", "test"))
@@ -80,14 +50,11 @@ def plot_embedding_projection(
     else:
         indices = np.arange(embeddings.size(0), dtype=int)
 
-    projected = _projection(
+    projected, reducer = _projection(
         embeddings.numpy(),
-        method=method,
         seed=seed,
         n_neighbors=n_neighbors,
         min_dist=min_dist,
-        perplexity=perplexity,
-        learning_rate=learning_rate,
     )
 
     label_values = labels.numpy()
@@ -121,7 +88,14 @@ def plot_embedding_projection(
                 label="successful CF",
             )
 
-    method_label = "t-SNE" if method == "tsne" else method.upper()
+    for row in payload.get('raw_results', []):
+        trajectory = row.get('counterfactual_trajectory')
+        if trajectory:
+            points = reducer.transform(np.asarray(trajectory, dtype=np.float32))
+            axis.plot(points[:, 0], points[:, 1], color='black', linewidth=1)
+            axis.scatter(*points[0], marker='o', color='black', s=35)
+            axis.scatter(*points[-1], marker='x', color='black', s=50)
+    method_label = "UMAP"
     axis.set_title(f"{model_label(payload)} {projection_split} embeddings ({method_label})")
     axis.set_xlabel(f"{method_label} 1")
     axis.set_ylabel(f"{method_label} 2")
@@ -134,24 +108,21 @@ def plot_embedding_projection(
         "dataset": str(payload.get("dataset", "")),
         "model": model_label(payload),
         "split": projection_split,
-        "method": method,
+        "method": "umap",
         "num_points": int(projected.shape[0]),
     }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Plot cached embedding spaces with PCA, t-SNE, or UMAP.")
+    parser = argparse.ArgumentParser(description="Plot cached embedding spaces with UMAP.")
     parser.add_argument("--input", type=Path, required=True, help="Experiment JSON payload.")
     parser.add_argument("--cache-dir", type=Path, default=Path("outputs/cache/embeddings"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--split", choices=["train", "val", "test"], default=None)
-    parser.add_argument("--method", choices=["pca", "tsne", "umap"], default="pca")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-points", type=int, default=3000)
     parser.add_argument("--n-neighbors", type=int, default=15)
     parser.add_argument("--min-dist", type=float, default=0.1)
-    parser.add_argument("--perplexity", type=float, default=30.0)
-    parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--no-highlight-success", action="store_true")
     args = parser.parse_args()
 
@@ -161,13 +132,10 @@ def main() -> None:
         args.cache_dir,
         args.output,
         split=args.split,
-        method=args.method,
         seed=args.seed,
         max_points=args.max_points,
         n_neighbors=args.n_neighbors,
         min_dist=args.min_dist,
-        perplexity=args.perplexity,
-        learning_rate="auto" if args.learning_rate is None else args.learning_rate,
         highlight_success=not args.no_highlight_success,
     )
     print(json.dumps(result, indent=2, sort_keys=True))

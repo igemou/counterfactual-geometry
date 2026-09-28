@@ -1,28 +1,18 @@
 from __future__ import annotations
 
-import json
+from ..core.utils import write_json
+
 from pathlib import Path
 
 import numpy as np
 import torch
 
-from .common import DATASET_ORDER, dataset_label, load_cached_split, load_json, main_experiment_paths, metric_value, model_label, split_cache_path, spearman, write_text
+from ..core.geometry import class_support_thresholds, endpoint_supported
+from .common import DATASET_ORDER, load_cached_split, load_json, main_experiment_paths, metric_value, model_label, split_cache_path, spearman
 
 
 def _within_class_knn_medians(embeddings: torch.Tensor, labels: torch.Tensor, k: int) -> dict[int, float]:
-    thresholds: dict[int, float] = {}
-    for class_id in sorted(int(value) for value in labels.unique().tolist()):
-        class_embeddings = embeddings[labels == class_id]
-        if class_embeddings.size(0) < 2:
-            thresholds[class_id] = float("inf")
-            continue
-        distances = torch.cdist(class_embeddings, class_embeddings)
-        distances.fill_diagonal_(float("inf"))
-        effective_k = min(k, class_embeddings.size(0) - 1)
-        knn_values, _ = torch.topk(distances, k=effective_k, largest=False, dim=1)
-        radii = knn_values[:, -1]
-        thresholds[class_id] = float(torch.median(radii).item())
-    return thresholds
+    return class_support_thresholds(embeddings, labels, k=k, quantile=0.5)
 
 
 def run_supported_flips_analysis(
@@ -44,12 +34,12 @@ def run_supported_flips_analysis(
                 no_flip += 1
                 continue
             target_label = row.get("target_label")
-            target_support_radius = row.get("target_support_radius", row.get("target_density"))
+            target_support_radius = row["target_support_radius"]
             if target_label is None or target_support_radius is None:
-                no_flip += 1
+                unsupported += 1
                 continue
             threshold = thresholds.get(int(target_label), float("inf"))
-            if float(target_support_radius) <= threshold:
+            if endpoint_supported(float(target_support_radius), threshold):
                 supported += 1
             else:
                 unsupported += 1
@@ -57,6 +47,7 @@ def run_supported_flips_analysis(
         model_rows.append({
             "dataset": str(payload.get("dataset", "")).lower(),
             "model": model_label(payload),
+            "seed": payload.get("seed"),
             "supported_flip_rate": supported / total,
             "unsupported_flip_rate": unsupported / total,
             "no_flip_rate": no_flip / total,
@@ -86,7 +77,7 @@ def run_supported_flips_analysis(
         "model_rows": model_rows,
         "dataset_rows": dataset_rows,
     }
-    write_text(output_dir / "supported_flips.json", json.dumps(payload, indent=2) + "\n")
+    write_json(output_dir / "supported_flips.json", payload)
     return payload
 
 __all__ = ["run_supported_flips_analysis"]

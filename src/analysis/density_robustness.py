@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from ..core.utils import write_json
+
 import argparse
-import json
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,7 @@ import numpy as np
 import torch
 
 from ..core.geometry import class_knn_radius
-from .common import DATASET_ORDER, dataset_label, load_cached_split, load_json, main_experiment_paths, metric_value, split_cache_path, spearman, write_text
+from .common import DATASET_ORDER, load_cached_split, load_json, main_experiment_paths, metric_value, split_cache_path, spearman
 from .geometry_prediction import _fit_and_score_ols, _held_out_split
 
 
@@ -57,7 +58,8 @@ def _rows_for_k(compare_dir: Path, cache_dir: Path, k: int) -> list[dict[str, An
             if target_label is None:
                 continue
             target_refs = reference_embeddings[reference_labels == int(target_label)]
-            support_radius = class_knn_radius(eval_embeddings[index], target_refs, k=k)
+            example_index = int(raw_result.get("example_index", index))
+            support_radius = class_knn_radius(eval_embeddings[example_index], target_refs, k=k)
             rows.append({
                 "dataset": str(payload.get("dataset", "")).lower(),
                 "boundary_distance": metric_value(raw_result, "boundary_distance"),
@@ -65,7 +67,7 @@ def _rows_for_k(compare_dir: Path, cache_dir: Path, k: int) -> list[dict[str, An
                 "local_support_radius_feature_std": support_radius / feature_std_scale,
                 "local_support_radius_pairwise_median": support_radius / pairwise_distance_scale,
                 "counterfactual_success": float(bool(raw_result.get("counterfactual_success", False))),
-                "example_index": index,
+                "example_index": example_index,
                 "model": str(payload.get("encoder", payload.get("multimodal_encoder", ""))),
             })
     return rows
@@ -108,11 +110,12 @@ def run_density_robustness(
     test_fraction: float,
     seed: int,
 ) -> dict[str, Any]:
+    rows_by_k = {k: _rows_for_k(compare_dir, cache_dir, k=k) for k in ks}
     dataset_rows: list[dict[str, Any]] = []
     for dataset in DATASET_ORDER:
         by_k: list[dict[str, Any]] = []
         for k in ks:
-            rows = [row for row in _rows_for_k(compare_dir, cache_dir, k=k) if row["dataset"] == dataset]
+            rows = [row for row in rows_by_k[k] if row["dataset"] == dataset]
             if not rows:
                 continue
             train_rows, test_rows = _held_out_split(rows, test_fraction=test_fraction, seed=seed)
@@ -158,7 +161,7 @@ def run_density_robustness(
         },
         "datasets": dataset_rows,
     }
-    write_text(output_dir / "density_robustness.json", json.dumps(payload, indent=2) + "\n")
+    write_json(output_dir / "density_robustness.json", payload)
     return payload
 
 

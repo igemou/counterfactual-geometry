@@ -1,21 +1,8 @@
 from __future__ import annotations
 
-from .dataset_utils import (
-    IMAGENET_MEAN,
-    IMAGENET_STD,
-    ImageFolderDataModule,
-    _build_image_transform,
-    _dl_kwargs,
-    make_weighted_sampler,
-)
 from .datasets_image import ChestXrayDataModule, MNISTDataModule, ShapesDataModule
-from .datasets_multimodal import (
-    MMIMDbDataModule,
-    MMIMDbImageDataset,
-    MMIMDbMultimodalDataset,
-    MMIMDbTextDataset,
-)
-from .datasets_text import IMDBDataModule, IMDBTextDataset, TokenizedTextDataset
+from .datasets_multimodal import MMIMDbDataModule
+from .datasets_text import IMDBDataModule
 
 
 def build_datamodule(name: str, **kwargs):

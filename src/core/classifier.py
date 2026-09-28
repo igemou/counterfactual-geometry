@@ -33,8 +33,6 @@ class LinearClassifier(nn.Module):
     def classify_encoded(self, encoded_embeddings: torch.Tensor) -> torch.Tensor:
         if self.head is not None:
             return self.head(encoded_embeddings)
-        if self.linear is None:
-            raise ValueError("Linear classifier is missing its output layer")
         return self.linear(encoded_embeddings)
 
     def forward(self, embeddings: torch.Tensor) -> torch.Tensor:

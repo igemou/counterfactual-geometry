@@ -6,10 +6,11 @@ import torch
 from torch import nn
 
 from ..core.datasets import build_datamodule
+from ..core.dataset_utils import IMAGENET_MEAN, IMAGENET_STD
 from ..core.encoders import build_encoder, build_processor, freeze_encoder, unpack_batch
 from ..core.utils import embedding_cache_path, to_device
 
-PROCESSOR_VISION_ENCODERS = {"dinov2", "siglip2", "clip"}
+PROCESSOR_VISION_ENCODERS = {"dinov2"}
 TORCHVISION_VISION_ENCODERS = {"resnet50", "vit"}
 
 def resolve_device(device: str | None) -> torch.device:
@@ -31,24 +32,6 @@ VISION_BACKBONES = ("resnet50", "vit", "dinov2")
 TEXT_BACKBONES = ("distilbert", "bert", "roberta")
 MULTIMODAL_BACKBONES = ("clip", "siglip2")
 REPRESENTATIONS = ("image", "text", "multimodal", "fused")
-SUITE_MULTIMODAL_ENCODERS = MULTIMODAL_BACKBONES
-
-
-def suite_output_path(
-    output_dir: Path,
-    representation: str,
-    image_encoder: str | None,
-    text_encoder: str | None,
-    multimodal_encoder: str | None = None,
-) -> Path:
-    parts = ["multimodal", representation]
-    if image_encoder:
-        parts.append(image_encoder)
-    if text_encoder:
-        parts.append(text_encoder)
-    if multimodal_encoder:
-        parts.append(multimodal_encoder)
-    return output_dir / ("_".join(parts) + "_encoder_comparison.json")
 
 
 class EncodedLinearHead(nn.Module):
@@ -58,8 +41,6 @@ class EncodedLinearHead(nn.Module):
             reference = probe.head
         else:
             reference = probe.linear
-        if reference is None:
-            raise ValueError("Probe does not expose a final linear layer")
         self.linear = nn.Linear(reference.in_features, reference.out_features)
         self.linear.load_state_dict(reference.state_dict())
 
@@ -99,8 +80,10 @@ def build_multimodal_datamodule(
 
 def _prepare_image_inputs(features, processor, device: torch.device):
     if processor is None:
-        return features.to(device)
-    processed = processor(images=[image.cpu() for image in features], return_tensors="pt")
+        mean = features.new_tensor(IMAGENET_MEAN)[None, :, None, None]
+        std = features.new_tensor(IMAGENET_STD)[None, :, None, None]
+        return ((features - mean) / std).to(device)
+    processed = processor(images=[image.cpu() for image in features], do_rescale=False, return_tensors="pt")
     return to_device(dict(processed), device)
 
 

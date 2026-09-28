@@ -31,7 +31,6 @@ class MNISTDataModule(ImageFolderDataModule):
             val_split="val",
             test_split="test",
             train_split="train",
-            fallback_val_to_test=False,
             seed=seed,
         )
         self.val_split_ratio = val_split_ratio
@@ -132,7 +131,6 @@ class ChestXrayDataModule(ImageFolderDataModule):
             val_split="val",
             test_split="test",
             train_split="train",
-            fallback_val_to_test=False,
             seed=seed,
         )
 
@@ -159,7 +157,6 @@ class ShapesDataModule(ImageFolderDataModule):
             val_split="val",
             test_split="test",
             train_split="train",
-            fallback_val_to_test=False,
             seed=seed,
         )
         self.val_split_ratio = val_split_ratio

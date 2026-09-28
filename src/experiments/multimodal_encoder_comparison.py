@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..core.utils import write_json
 import argparse
 import json
 from pathlib import Path
@@ -18,137 +19,13 @@ from .common import (
     EncodedLinearHead,
     MULTIMODAL_BACKBONES,
     REPRESENTATIONS,
-    SUITE_MULTIMODAL_ENCODERS,
     TEXT_BACKBONES,
     VISION_BACKBONES,
     build_multimodal_datamodule,
     load_multimodal_split_embeddings,
     project_if_needed,
     resolve_device,
-    suite_output_path,
 )
-
-# Backward-compatible re-exports for callers that previously imported helper
-# functions from this runner module directly.
-_build_multimodal_datamodule = build_multimodal_datamodule
-_load_multimodal_split_embeddings = load_multimodal_split_embeddings
-
-
-def run_multimodal_suite(
-    output_dir: Path,
-    device: str | None = None,
-    seed: int = 42,
-    batch_size: int = 32,
-    num_workers: int = 4,
-    probe_epochs: int = 100,
-    probe_lr: float = 1e-3,
-    probe_weight_decay: float = 1e-4,
-    fusion_projection_dim: int | None = None,
-    save_probe_dir: Path | None = None,
-    max_examples: int | None = None,
-    data_dir: str | Path | None = None,
-    embedding_cache_root: str | Path | None = None,
-    hf_cache_dir: str | Path | None = None,
-) -> dict[str, object]:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    records: list[dict[str, str]] = []
-
-    for image_encoder in VISION_BACKBONES:
-        output = run_multimodal_encoder_comparison(
-            representation="image",
-            image_encoder_name=image_encoder,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            device=device,
-            seed=seed,
-            probe_epochs=probe_epochs,
-            probe_lr=probe_lr,
-            probe_weight_decay=probe_weight_decay,
-            max_examples=max_examples,
-            save_probe_dir=save_probe_dir,
-            data_dir=data_dir,
-            embedding_cache_root=embedding_cache_root,
-            hf_cache_dir=hf_cache_dir,
-        )
-        output_path = suite_output_path(output_dir, "image", image_encoder, None)
-        output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n")
-        records.append({"representation": "image", "image_encoder": image_encoder, "output": str(output_path)})
-
-    for text_encoder in TEXT_BACKBONES:
-        output = run_multimodal_encoder_comparison(
-            representation="text",
-            text_encoder_name=text_encoder,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            device=device,
-            seed=seed,
-            probe_epochs=probe_epochs,
-            probe_lr=probe_lr,
-            probe_weight_decay=probe_weight_decay,
-            max_examples=max_examples,
-            save_probe_dir=save_probe_dir,
-            data_dir=data_dir,
-            embedding_cache_root=embedding_cache_root,
-            hf_cache_dir=hf_cache_dir,
-        )
-        output_path = suite_output_path(output_dir, "text", None, text_encoder)
-        output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n")
-        records.append({"representation": "text", "text_encoder": text_encoder, "output": str(output_path)})
-
-    for multimodal_encoder in SUITE_MULTIMODAL_ENCODERS:
-        output = run_multimodal_encoder_comparison(
-            representation="multimodal",
-            multimodal_encoder_name=multimodal_encoder,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            device=device,
-            seed=seed,
-            probe_epochs=probe_epochs,
-            probe_lr=probe_lr,
-            probe_weight_decay=probe_weight_decay,
-            max_examples=max_examples,
-            save_probe_dir=save_probe_dir,
-            data_dir=data_dir,
-            embedding_cache_root=embedding_cache_root,
-            hf_cache_dir=hf_cache_dir,
-        )
-        output_path = suite_output_path(output_dir, "multimodal", None, None, multimodal_encoder)
-        output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n")
-        records.append({"representation": "multimodal", "multimodal_encoder": multimodal_encoder, "output": str(output_path)})
-
-    for image_encoder in VISION_BACKBONES:
-        for text_encoder in TEXT_BACKBONES:
-            output = run_multimodal_encoder_comparison(
-                representation="fused",
-                image_encoder_name=image_encoder,
-                text_encoder_name=text_encoder,
-                fusion_projection_dim=fusion_projection_dim,
-                batch_size=batch_size,
-                num_workers=num_workers,
-                device=device,
-                seed=seed,
-                probe_epochs=probe_epochs,
-                probe_lr=probe_lr,
-                probe_weight_decay=probe_weight_decay,
-                max_examples=max_examples,
-                save_probe_dir=save_probe_dir,
-                data_dir=data_dir,
-                embedding_cache_root=embedding_cache_root,
-                hf_cache_dir=hf_cache_dir,
-            )
-            output_path = suite_output_path(output_dir, "fused", image_encoder, text_encoder)
-            output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n")
-            records.append({
-                "representation": "fused",
-                "image_encoder": image_encoder,
-                "text_encoder": text_encoder,
-                "output": str(output_path),
-            })
-
-    summary_path = output_dir / "multimodal_representation_suite_index.json"
-    summary_path.write_text(json.dumps(records, indent=2, sort_keys=True) + "\n")
-    return {"num_runs": len(records), "index": str(summary_path)}
-
 
 def run_multimodal_encoder_comparison(
     representation: str,
@@ -169,11 +46,12 @@ def run_multimodal_encoder_comparison(
     eval_split: str = "test",
     reference_split: str = "val",
     max_examples: int | None = None,
-    counterfactual_mode: str = "targeted",
     k: int = 20,
     step_size: float = 1e-2,
-    max_steps: int = 500,
+    max_steps: int = 300,
     trust_radius: float = 1.0,
+    shift_weight: float = 0.0,
+    tangent_dim: int = 2,
     record_trajectories: bool = False,
     max_trajectory_points: int = 10,
     save_probe_dir: str | Path | None = None,
@@ -308,8 +186,6 @@ def run_multimodal_encoder_comparison(
         }
         eval_classifier = EncodedLinearHead(classifier_head).to(resolved_device).eval()
 
-    if eval_split not in split_to_embeddings or reference_split not in split_to_embeddings:
-        raise ValueError("Unsupported eval/reference split")
 
     eval_embeddings, eval_labels = split_to_embeddings[eval_split]
     eval_indices = torch.arange(eval_embeddings.size(0), dtype=torch.long)
@@ -330,11 +206,12 @@ def run_multimodal_encoder_comparison(
         example_indices=eval_indices,
         record_trajectory=record_trajectories,
         max_trajectory_points=max_trajectory_points,
-        counterfactual_mode=counterfactual_mode,
         k=k,
         step_size=step_size,
         max_steps=max_steps,
         trust_radius=trust_radius,
+        shift_weight=shift_weight,
+        tangent_dim=tangent_dim,
     )
 
     output: dict[str, object] = {
@@ -350,12 +227,14 @@ def run_multimodal_encoder_comparison(
         "fusion_projection_dim": int(projection_dim) if projection_dim is not None else 0,
         "eval_split": eval_split,
         "reference_split": reference_split,
-        "counterfactual_mode": counterfactual_mode,
+        "counterfactual_mode": "targeted",
         "target_strategy": "second_best",
         "k": k,
         "step_size": step_size,
         "max_steps": max_steps,
         "trust_radius": trust_radius,
+        "shift_weight": shift_weight,
+        "tangent_dim": tangent_dim,
         "test_accuracy": _classification_accuracy(
             eval_classifier,
             split_to_embeddings["test"][0].to(resolved_device),
@@ -422,12 +301,14 @@ def run_multimodal_encoder_comparison(
                 "probe_epochs": probe_epochs,
                 "eval_split": eval_split,
                 "reference_split": reference_split,
-                "counterfactual_mode": counterfactual_mode,
+                "counterfactual_mode": "targeted",
                 "target_strategy": "second_best",
                 "k": k,
                 "step_size": step_size,
                 "max_steps": max_steps,
                 "trust_radius": trust_radius,
+                "shift_weight": shift_weight,
+                "tangent_dim": tangent_dim,
                 "probe_best_epoch": int(probe_training_stats["best_epoch"]),
                 "probe_best_score": float(probe_training_stats["best_score"]),
                 "probe_selection_metric": str(probe_training_stats["selection_metric"]),
@@ -458,10 +339,9 @@ def main() -> None:
     parser.add_argument("--eval-split", choices=["val", "test"], default="test")
     parser.add_argument("--reference-split", choices=["train", "val", "test"], default="val")
     parser.add_argument("--max-examples", type=int, default=None)
-    parser.add_argument("--counterfactual-mode", choices=["untargeted", "targeted"], default="targeted")
     parser.add_argument("--k", type=int, default=20)
     parser.add_argument("--step-size", type=float, default=1e-2)
-    parser.add_argument("--max-steps", type=int, default=500)
+    parser.add_argument("--max-steps", type=int, default=300)
     parser.add_argument("--trust-radius", type=float, default=1.0)
     parser.add_argument("--record-trajectories", action="store_true")
     parser.add_argument("--max-trajectory-points", type=int, default=10)
@@ -471,6 +351,8 @@ def main() -> None:
     parser.add_argument("--embedding-cache-root", type=Path, default=None)
     parser.add_argument("--hf-cache-dir", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--shift-weight", type=float, default=0.0)
+    parser.add_argument("--tangent-dim", type=int, default=2)
     args = parser.parse_args()
 
     output = run_multimodal_encoder_comparison(
@@ -492,11 +374,12 @@ def main() -> None:
         eval_split=args.eval_split,
         reference_split=args.reference_split,
         max_examples=args.max_examples,
-        counterfactual_mode=args.counterfactual_mode,
         k=args.k,
         step_size=args.step_size,
         max_steps=args.max_steps,
         trust_radius=args.trust_radius,
+        shift_weight=args.shift_weight,
+        tangent_dim=args.tangent_dim,
         record_trajectories=args.record_trajectories,
         max_trajectory_points=args.max_trajectory_points,
         save_probe_dir=args.save_probe_dir,
@@ -508,7 +391,7 @@ def main() -> None:
 
     print(json.dumps(output, indent=2, sort_keys=True))
     if args.output is not None:
-        args.output.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n")
+        write_json(args.output, output)
 
 
 if __name__ == "__main__":

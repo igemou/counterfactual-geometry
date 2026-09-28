@@ -1,22 +1,162 @@
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
+import torch
+import torch.nn.functional as F
+from torchvision import models
+
 from torch import nn
-from transformers import AutoImageProcessor, AutoProcessor, AutoTokenizer
+from transformers import AutoImageProcessor, AutoProcessor, AutoTokenizer, AutoModel, Dinov2Model, CLIPModel, SiglipModel
 
-from .multimodal_encoders import CLIPMultimodalEncoder, SigLIP2MultimodalEncoder
-from .text_encoders import HuggingFaceTextEncoder
-from .vision_encoders import (
-    CLIPVisionEncoder,
-    DinoV2Encoder,
-    ResNet50Encoder,
-    SigLIP2VisionEncoder,
-    TorchvisionViTEncoder,
-)
+class HuggingFaceTextEncoder(nn.Module):
+    uses_processor = False
+
+    def __init__(self, model_name: str):
+        super().__init__()
+        self.model = AutoModel.from_pretrained(model_name)
+        hidden_size = getattr(self.model.config, "hidden_size", None)
+        if hidden_size is None:
+            raise ValueError(f"Could not infer hidden size for {model_name}")
+        self.output_dim = hidden_size
+        signature = inspect.signature(self.model.forward)
+        self._accepted_kwargs = {
+            name
+            for name, parameter in signature.parameters.items()
+            if parameter.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
+
+    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, **kwargs) -> torch.Tensor:
+        filtered_kwargs = {key: value for key, value in kwargs.items() if key in self._accepted_kwargs}
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, **filtered_kwargs)
+        hidden = outputs.last_hidden_state
+        if attention_mask is None:
+            return hidden.mean(dim=1)
+        mask = attention_mask.unsqueeze(-1).to(hidden.dtype)
+        pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
+        return pooled
+
+class ResNet50Encoder(nn.Module):
+    uses_processor = False
+
+    def __init__(self, pretrained: bool = True):
+        super().__init__()
+        weights = models.ResNet50_Weights.DEFAULT if pretrained else None
+        model = models.resnet50(weights=weights)
+        self.output_dim = model.fc.in_features
+        model.fc = nn.Identity()
+        self.model = model
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(x)
 
 
-VISION_ENCODERS = {"resnet50", "vit", "dinov2", "clip", "siglip2"}
+class TorchvisionViTEncoder(nn.Module):
+    uses_processor = False
+
+    def __init__(self, pretrained: bool = True):
+        super().__init__()
+        weights = models.ViT_B_16_Weights.DEFAULT if pretrained else None
+        model = models.vit_b_16(weights=weights)
+        self.output_dim = model.heads.head.in_features
+        model.heads = nn.Identity()
+        self.model = model
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(x)
+
+
+class HuggingFaceVisionEncoder(nn.Module):
+    uses_processor = True
+
+    def __init__(self, model_name: str, model_cls):
+        super().__init__()
+        self.model_name = model_name
+        self.model = model_cls.from_pretrained(model_name)
+        hidden_size = getattr(self.model.config, "hidden_size", None)
+        if hidden_size is None:
+            vision_config = getattr(self.model.config, "vision_config", None)
+            hidden_size = getattr(vision_config, "hidden_size", None)
+        if hidden_size is None:
+            projection_dim = getattr(self.model.config, "projection_dim", None)
+            hidden_size = projection_dim
+        if hidden_size is None:
+            raise ValueError(f"Could not infer hidden size for {model_name}")
+        self.output_dim = hidden_size
+
+    def forward(self, pixel_values: torch.Tensor, **kwargs) -> torch.Tensor:
+        outputs = self.model(pixel_values=pixel_values, **kwargs)
+        if hasattr(outputs, "image_embeds") and outputs.image_embeds is not None:
+            return outputs.image_embeds
+        if hasattr(outputs, "pooler_output") and outputs.pooler_output is not None:
+            return outputs.pooler_output
+        if hasattr(outputs, "last_hidden_state"):
+            return outputs.last_hidden_state[:, 0]
+        raise ValueError("Unsupported output structure for Hugging Face vision encoder")
+
+
+class DinoV2Encoder(HuggingFaceVisionEncoder):
+    def __init__(self, model_name: str = "facebook/dinov2-base"):
+        super().__init__(model_name=model_name, model_cls=Dinov2Model)
+
+def _infer_multimodal_projection_dim(config) -> int | None:
+    candidates = [
+        getattr(config, "projection_dim", None),
+        getattr(config, "projection_size", None),
+    ]
+    for nested_name in ("text_config", "vision_config"):
+        nested = getattr(config, nested_name, None)
+        if nested is None:
+            continue
+        candidates.extend(
+            [
+                getattr(nested, "projection_dim", None),
+                getattr(nested, "projection_size", None),
+                getattr(nested, "hidden_size", None),
+            ]
+        )
+    for value in candidates:
+        if value is not None:
+            return int(value)
+    return None
+
+
+class HuggingFaceMultimodalEncoder(nn.Module):
+    uses_processor = True
+
+    def __init__(self, model_name: str, model_cls):
+        super().__init__()
+        self.model_name = model_name
+        self.model = model_cls.from_pretrained(model_name)
+        projection_dim = _infer_multimodal_projection_dim(self.model.config)
+        if projection_dim is None:
+            raise ValueError(f"Could not infer projection dimension for {model_name}")
+        self.output_dim = int(projection_dim) * 2
+
+    def forward(self, pixel_values: torch.Tensor, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None, **kwargs) -> torch.Tensor:
+        outputs = self.model(
+            pixel_values=pixel_values,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        image_embeds = F.normalize(outputs.image_embeds, dim=-1)
+        text_embeds = F.normalize(outputs.text_embeds, dim=-1)
+        return torch.cat([image_embeds, text_embeds], dim=-1)
+
+
+class SigLIP2MultimodalEncoder(HuggingFaceMultimodalEncoder):
+    def __init__(self, model_name: str = "google/siglip2-base-patch16-224"):
+        super().__init__(model_name=model_name, model_cls=SiglipModel)
+
+
+class CLIPMultimodalEncoder(HuggingFaceMultimodalEncoder):
+    def __init__(self, model_name: str = "openai/clip-vit-base-patch32"):
+        super().__init__(model_name=model_name, model_cls=CLIPModel)
+
+
+VISION_ENCODERS = {"resnet50", "vit", "dinov2"}
 TEXT_ENCODERS = {"distilbert", "bert", "roberta"}
 MULTIMODAL_ENCODERS = {"clip", "siglip2"}
 
@@ -47,11 +187,11 @@ def build_encoder(name: str, **kwargs: Any) -> nn.Module:
     if lowered == "siglip2":
         if multimodal:
             return SigLIP2MultimodalEncoder(model_name=model_name or "google/siglip2-base-patch16-224")
-        return SigLIP2VisionEncoder(model_name=model_name or "google/siglip2-base-patch16-224")
+        raise ValueError("SigLIP2 is used as a multimodal encoder; set multimodal=True")
     if lowered == "clip":
         if multimodal:
             return CLIPMultimodalEncoder(model_name=model_name or "openai/clip-vit-base-patch32")
-        return CLIPVisionEncoder(model_name=model_name or "openai/clip-vit-base-patch32")
+        raise ValueError("CLIP is used as a multimodal encoder; set multimodal=True")
     raise ValueError(f"Unsupported encoder: {name}")
 
 
@@ -86,14 +226,3 @@ def unpack_batch(batch):
         return batch[0], batch[1]
 
     return batch, None
-
-
-def encode_batch(encoder: nn.Module, batch):
-    features, labels = unpack_batch(batch)
-    if isinstance(features, dict):
-        if "text" in features and "image" not in features and "pixel_values" not in features:
-            raise ValueError("Text batches must be tokenized before calling encode_batch.")
-        embeddings = encoder(**features)
-    else:
-        embeddings = encoder(features)
-    return embeddings, labels

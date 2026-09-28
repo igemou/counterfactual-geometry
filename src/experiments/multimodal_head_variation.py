@@ -105,11 +105,12 @@ def run_multimodal_classifier_head_variation(
     eval_split: str = "test",
     reference_split: str = "val",
     max_examples: int | None = None,
-    counterfactual_mode: str = "targeted",
     k: int = 20,
     step_size: float = 1e-2,
-    max_steps: int = 500,
+    max_steps: int = 300,
     trust_radius: float = 1.0,
+    shift_weight: float = 0.0,
+    tangent_dim: int = 2,
     intervention_seeds: list[int] | None = None,
     intervention_probe_lrs: list[float] | None = None,
     intervention_probe_weight_decays: list[float] | None = None,
@@ -283,11 +284,12 @@ def run_multimodal_classifier_head_variation(
             reference_labels=reference_labels,
             max_examples=max_examples,
             same_reference_pool=same_reference_pool,
-            counterfactual_mode=counterfactual_mode,
             k=k,
             step_size=step_size,
             max_steps=max_steps,
             trust_radius=trust_radius,
+            shift_weight=shift_weight,
+            tangent_dim=tangent_dim,
         )
 
         output = {
@@ -330,6 +332,11 @@ def run_multimodal_classifier_head_variation(
             if baseline_accuracy is not None:
                 output["delta_test_accuracy"] = output["test_accuracy"] - baseline_accuracy
 
+        variant_checkpoint = Path(probe_checkpoint).parent / (Path(probe_checkpoint).stem + "_" + output["name"] + ".pt")
+        torch.save({"classifier_state_dict": classifier_head.state_dict(),
+                    "input_dim": train_embeddings.shape[1], "num_classes": int(train_labels.max()) + 1,
+                    "metadata": {"projection_dim": projection_dim, **output.get("training", {})}}, variant_checkpoint)
+        output["probe_checkpoint"] = str(variant_checkpoint)
         variant_outputs.append(output)
 
     return {
@@ -353,12 +360,14 @@ def run_multimodal_classifier_head_variation(
         "baseline_probe_weight_decay": baseline_probe_weight_decay,
         "eval_split": eval_split,
         "reference_split": reference_split,
-        "counterfactual_mode": counterfactual_mode,
+        "counterfactual_mode": "targeted",
         "target_strategy": "second_best",
         "k": k,
         "step_size": step_size,
         "max_steps": max_steps,
         "trust_radius": trust_radius,
+        "shift_weight": shift_weight,
+        "tangent_dim": tangent_dim,
         "num_train": int(train_embeddings.size(0)),
         "num_val": int(val_embeddings.size(0)),
         "num_test": int(split_to_embeddings["test"][0].size(0)),
@@ -383,10 +392,9 @@ def main() -> None:
     parser.add_argument("--eval-split", choices=["val", "test"], default="test")
     parser.add_argument("--reference-split", choices=["train", "val", "test"], default="val")
     parser.add_argument("--max-examples", type=int, default=None)
-    parser.add_argument("--counterfactual-mode", choices=["untargeted", "targeted"], default="targeted")
     parser.add_argument("--k", type=int, default=20)
     parser.add_argument("--step-size", type=float, default=1e-2)
-    parser.add_argument("--max-steps", type=int, default=500)
+    parser.add_argument("--max-steps", type=int, default=300)
     parser.add_argument("--trust-radius", type=float, default=1.0)
     parser.add_argument("--intervention-seed", action="append", default=None)
     parser.add_argument("--intervention-probe-lr", action="append", default=None)
@@ -396,6 +404,8 @@ def main() -> None:
     parser.add_argument("--embedding-cache-root", type=Path, default=None)
     parser.add_argument("--hf-cache-dir", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--shift-weight", type=float, default=0.0)
+    parser.add_argument("--tangent-dim", type=int, default=2)
     args = parser.parse_args()
 
     output = run_multimodal_classifier_head_variation(
@@ -414,11 +424,12 @@ def main() -> None:
         eval_split=args.eval_split,
         reference_split=args.reference_split,
         max_examples=args.max_examples,
-        counterfactual_mode=args.counterfactual_mode,
         k=args.k,
         step_size=args.step_size,
         max_steps=args.max_steps,
         trust_radius=args.trust_radius,
+        shift_weight=args.shift_weight,
+        tangent_dim=args.tangent_dim,
         intervention_seeds=_parse_int_list(args.intervention_seed, default=[]),
         intervention_probe_lrs=_parse_float_list(args.intervention_probe_lr, default=[]),
         intervention_probe_weight_decays=_parse_float_list(args.intervention_probe_weight_decay, default=[]),

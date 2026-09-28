@@ -8,11 +8,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ..core.utils import embedding_cache_path, load_probe, load_probe_checkpoint
+from ..core.utils import embedding_cache_path, load_probe
 
 
-DATASET_ORDER = ["shapes", "imdb", "mnist", "chestxray", "mmimdb"]
+DATASET_ORDER = ["shapes", "imdb", "mnist", "chestxray", "mmimdb", "papalexi"]
 MAIN_STANDARD_ENCODERS = {
+    "papalexi": ("scgpt", "geneformer"),
     "shapes": ("resnet50", "vit", "dinov2"),
     "imdb": ("bert", "distilbert", "roberta"),
     "mnist": ("resnet50", "vit", "dinov2"),
@@ -24,6 +25,7 @@ MULTIMODAL_FUSION_REPRESENTATION = "fused"
 
 def dataset_label(name: str) -> str:
     return {
+        "papalexi": "Papalexi",
         "shapes": "Shapes",
         "imdb": "IMDB",
         "mnist": "MNIST",
@@ -34,6 +36,8 @@ def dataset_label(name: str) -> str:
 
 def encoder_label(name: str) -> str:
     return {
+        "scgpt": "scGPT",
+        "geneformer": "Geneformer",
         "resnet50": "ResNet50",
         "vit": "ViT",
         "dinov2": "DINOv2",
@@ -110,53 +114,32 @@ def r2_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 
 def main_experiment_paths(compare_dir: Path) -> list[Path]:
-    paths: list[Path] = []
-    for dataset, encoders in MAIN_STANDARD_ENCODERS.items():
-        for encoder in encoders:
-            candidates = [
-                compare_dir / f"{dataset}_{encoder}_encoder_comparison.json",
-                compare_dir / f"{dataset}_{encoder}_experiment.json",
-            ]
-            for path in candidates:
-                if path.exists():
-                    paths.append(path)
-                    break
-    for encoder in MAIN_MMIMDB_MULTIMODAL_ENCODERS:
-        candidates = [
-            compare_dir / "mmimdb_suite" / f"mmimdb_multimodal_{encoder}_encoder_comparison.json",
-            compare_dir / f"mmimdb_multimodal_{encoder}_encoder_comparison.json",
-            compare_dir / f"multimodal_multimodal_{encoder}_encoder_comparison.json",
-            compare_dir / "mmimdb_suite" / f"mmimdb_multimodal_{encoder}_experiment.json",
-            compare_dir / f"mmimdb_multimodal_{encoder}_experiment.json",
-            compare_dir / f"multimodal_multimodal_{encoder}_experiment.json",
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                paths.append(candidate)
-                break
+    """Read result metadata in the input directory and its seed subdirectories."""
+    directories = [compare_dir] + sorted(p for p in compare_dir.glob("seed*") if p.is_dir())
+    paths = []
+    for directory in directories:
+        for path in sorted(directory.glob("*.json")):
+            payload = load_json(path)
+            if not isinstance(payload, dict) or "raw_results" not in payload:
+                continue
+            if payload.get("variant") or payload.get("search_variant"):
+                continue
+            dataset = payload.get("dataset")
+            encoder = payload.get("encoder") or payload.get("multimodal_encoder")
+            allowed = (MAIN_MMIMDB_MULTIMODAL_ENCODERS if dataset == "mmimdb"
+                       else MAIN_STANDARD_ENCODERS.get(dataset, ()))
+            if encoder in allowed:
+                paths.append(path)
+    if not paths:
+        raise FileNotFoundError(f"No main experiment results found in {compare_dir} or its seed subdirectories")
     return paths
 
 
 def all_intervention_paths(interventions_dir: Path) -> list[Path]:
     candidates = list(interventions_dir.glob("*_classifier_head_variation.json"))
-    if not candidates:
-        candidates = list(interventions_dir.glob("*_boundary_intervention.json"))
+    for directory in sorted(interventions_dir.glob("seed*")):
+        candidates.extend(directory.glob("*_classifier_head_variation.json"))
     return sorted(path for path in candidates if path.is_file())
-
-
-def payload_seed(payload: dict[str, Any]) -> int | None:
-    raw_seed = payload.get("seed")
-    if raw_seed is not None:
-        return int(raw_seed)
-    checkpoint_path = payload.get("probe_checkpoint")
-    if not checkpoint_path:
-        return None
-    checkpoint = load_probe_checkpoint(checkpoint_path, map_location="cpu")
-    metadata = checkpoint.get("metadata", {})
-    if not isinstance(metadata, dict):
-        return None
-    seed = metadata.get("seed")
-    return int(seed) if seed is not None else None
 
 
 def model_label(payload: dict[str, Any]) -> str:
@@ -186,8 +169,8 @@ def model_label(payload: dict[str, Any]) -> str:
 def metric_value(mapping: dict[str, Any], *keys: str) -> float:
     for key in keys:
         value = mapping.get(key)
-        if value is not None:
-            return float(value)
+        if key in mapping:
+            return float(value) if value is not None else float("nan")
     raise KeyError(f"Missing metric keys {keys}")
 
 
@@ -196,7 +179,7 @@ def experiment_summary_row(path: Path) -> dict[str, Any]:
     return {
         "dataset": str(payload.get("dataset", "")).lower(),
         "model": model_label(payload),
-        "seed": payload_seed(payload),
+        "seed": int(payload["seed"]),
         "path": str(path),
         "payload": payload,
         "val_accuracy": float(payload["val_accuracy"]),
@@ -208,6 +191,8 @@ def experiment_summary_row(path: Path) -> dict[str, Any]:
 
 
 def split_cache_path(payload: dict[str, Any], cache_dir: Path, split: str) -> Path:
+    if payload.get("split_paths"):
+        return Path(payload["split_paths"][split])
     dataset = str(payload.get("dataset", "")).lower()
     if dataset != "mmimdb":
         return embedding_cache_path(
@@ -258,9 +243,9 @@ def load_cached_split(cache_path: Path) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def validation_cross_entropy(payload: dict[str, Any], cache_dir: Path) -> float:
+    if "val_ce" in payload:
+        return float(payload["val_ce"])
     checkpoint_path = payload.get("probe_checkpoint")
-    if not checkpoint_path:
-        raise ValueError("Missing probe checkpoint.")
     classifier, _ = load_probe(checkpoint_path, map_location="cpu")
     classifier.eval()
     embeddings, labels = load_cached_split(split_cache_path(payload, cache_dir=cache_dir, split="val"))
@@ -272,3 +257,34 @@ def validation_cross_entropy(payload: dict[str, Any], cache_dir: Path) -> float:
 def attach_cross_entropy(rows: list[dict[str, Any]], cache_dir: Path) -> None:
     for row in rows:
         row["val_ce"] = validation_cross_entropy(row["payload"], cache_dir)
+
+
+DEFAULT_COMPARE_DIR = Path("outputs")
+DEFAULT_CACHE_DIR = Path("outputs/cache/embeddings")
+DEFAULT_OUTPUT_DIR = Path("outputs/analysis")
+
+
+def load_main_payloads(compare_dir):
+    payloads = [load_json(path) for path in main_experiment_paths(compare_dir)]
+    return payloads
+
+
+def load_payload_probe(payload):
+    probe, checkpoint = load_probe(payload["probe_checkpoint"], map_location="cpu")
+    return probe.eval(), checkpoint
+
+
+def load_payload_splits(payload, cache_dir):
+    return {split: load_cached_split(split_cache_path(payload, cache_dir, split))
+            for split in ("train", "val", "test")}
+
+
+def evaluation_indices(payload, count, max_examples=None):
+    """Replay stored row IDs so comparisons use exactly the same examples."""
+    rows = payload.get("raw_results", [])
+    indices = [int(row["example_index"]) for row in rows] if rows else list(range(count))
+    if max_examples is not None:
+        indices = indices[:max_examples]
+    if len(set(indices)) != len(indices) or any(i < 0 or i >= count for i in indices):
+        raise ValueError("Invalid or duplicate evaluation example indices")
+    return torch.tensor(indices, dtype=torch.long)

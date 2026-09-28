@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import torch
-from ..core.geometry import choose_target_label, decision_margin, estimate_local_geometry, untargeted_decision_margin
+from ..core.geometry import choose_target_label, decision_margin, estimate_local_geometry, class_support_thresholds, endpoint_supported
 from ..core.utils import ensure_2d, mean_std
-from .search import build_baseline_config, generate_counterfactual, target_density
+from .search import build_baseline_config, generate_counterfactual
 
 
-SUMMARY_SKIP_KEYS = {"start_label", "final_label", "target_label"}
+SUMMARY_SKIP_KEYS = {"start_label", "final_label", "target_label", "example_index"}
+SUCCESS_ONLY_KEYS = {"counterfactual_distance", "optimization_effort"}
 
 
 def _module_device(module) -> torch.device:
@@ -21,16 +22,21 @@ def evaluate_single_example(
     classifier_head,
     reference_embeddings: torch.Tensor,
     reference_labels: torch.Tensor,
-    counterfactual_mode: str = "targeted",
     k: int = 20,
     step_size: float = 1e-2,
-    max_steps: int = 500,
+    max_steps: int = 300,
     trust_radius: float = 1.0,
     optimizer_name: str = "sgd",
     exclude_self: bool = False,
-    target_strategy: str = "second_best",
     record_trajectory: bool = False,
     max_trajectory_points: int = 10,
+    shift_weight: float = 0.0,
+    tangent_dim: int = 2,
+    config=None,
+    target_label: int | None = None,
+    support_thresholds: dict[int, float] | None = None,
+    support_quantile: float = 0.5,
+    record_endpoint: bool = False,
 ) -> dict[str, float | int | bool]:
     device = _module_device(classifier_head)
     z = z.to(device)
@@ -40,16 +46,9 @@ def evaluate_single_example(
     with torch.no_grad():
         logits = classifier_head(ensure_2d(z)).squeeze(0)
         predicted_label = int(torch.argmax(logits).item())
-        target_label = None
-        initial_margin = float("-inf")
-        if logits.numel() > 1 and counterfactual_mode == "targeted":
-            target_label = choose_target_label(logits, strategy=target_strategy)
-            initial_margin = decision_margin(logits, predicted_label, target_label)
-        elif logits.numel() > 1:
-            competitor_logits = logits.clone()
-            competitor_logits[predicted_label] = -torch.inf
-            target_label = int(torch.argmax(competitor_logits).item())
-            initial_margin, _ = untargeted_decision_margin(logits, predicted_label)
+        if target_label is None:
+            target_label = choose_target_label(logits)
+        initial_margin = decision_margin(logits, predicted_label, target_label)
 
     geometry_stats = estimate_local_geometry(
         z=z,
@@ -60,13 +59,17 @@ def evaluate_single_example(
         neighborhood_label=target_label,
         k=k,
         exclude_self=exclude_self,
+        tangent_dim=config.tangent_dim if config is not None else tangent_dim,
+        curvature_eps=config.curvature_eps if config is not None else 1e-8,
     )
 
-    config = build_baseline_config(
+    config = config or build_baseline_config(
         step_size=step_size,
         trust_radius=trust_radius,
         max_steps=max_steps,
         optimizer_name=optimizer_name,
+        shift_weight=shift_weight,
+        tangent_dim=tangent_dim,
     )
     search_result = generate_counterfactual(
         z0=z,
@@ -75,8 +78,7 @@ def evaluate_single_example(
         reference_labels=reference_labels,
         config=config,
         k=k,
-        mode=counterfactual_mode,
-        target_strategy=target_strategy,
+        target_label=target_label,
         record_trajectory=record_trajectory,
         max_trajectory_points=max_trajectory_points,
     )
@@ -91,10 +93,16 @@ def evaluate_single_example(
         "start_label": search_result.start_label,
         "final_label": search_result.final_label,
     }
-    if search_result.target_label is not None:
-        target_refs = reference_embeddings[reference_labels == search_result.target_label]
-        result["target_support_radius"] = target_density(search_result.final_embedding, target_refs, k=k)
-        result["target_label"] = search_result.target_label
+    result["target_support_radius"] = search_result.density
+    result["target_label"] = search_result.target_label
+    thresholds = support_thresholds
+    if thresholds is None:
+        thresholds = class_support_thresholds(reference_embeddings, reference_labels, k, support_quantile)
+    threshold = thresholds.get(search_result.target_label, float("nan"))
+    result["support_threshold"] = threshold
+    result["supported_counterfactual_success"] = search_result.success and endpoint_supported(search_result.density, threshold)
+    if record_endpoint:
+        result["final_embedding"] = search_result.final_embedding.cpu().tolist()
     if search_result.trajectory is not None:
         result["counterfactual_trajectory"] = [point.tolist() for point in search_result.trajectory]
     return result
@@ -111,10 +119,13 @@ def summarize_metrics(results: list[dict[str, float | int | bool]]) -> dict[str,
         if isinstance(value, (int, float, bool)) and key not in SUMMARY_SKIP_KEYS
     ]
     for key in keys:
-        values = [float(result[key]) for result in results]
-        mean, std = mean_std(values)
+        selected = [row for row in results if row["counterfactual_success"]] if key in SUCCESS_ONLY_KEYS else results
+        values = [float(result[key]) for result in selected]
+        mean, std = mean_std(values) if values else (float("nan"), float("nan"))
         summary[f"{key}_mean"] = mean
         summary[f"{key}_std"] = std
+    summary["num_evaluated"] = len(results)
+    summary["num_successful"] = sum(bool(row["counterfactual_success"]) for row in results)
     return summary
 
 
@@ -132,6 +143,13 @@ def evaluate_embeddings(
     **kwargs,
 ) -> tuple[list[dict[str, float | int | bool]], dict[str, float]]:
     del labels
+    if len(embeddings) == 0:
+        raise ValueError("Evaluation requires at least one example")
+    if max_examples is not None and max_examples < 1:
+        raise ValueError("max_examples must be positive")
+    if "support_thresholds" not in kwargs:
+        kwargs["support_thresholds"] = class_support_thresholds(reference_embeddings, reference_labels,
+                                                               kwargs.get("k", 20), kwargs.get("support_quantile", 0.5))
     results = []
     total = embeddings.size(0) if max_examples is None else min(max_examples, embeddings.size(0))
     for index in range(total):
@@ -145,7 +163,6 @@ def evaluate_embeddings(
             max_trajectory_points=max_trajectory_points,
             **kwargs,
         )
-        if example_indices is not None:
-            result["example_index"] = int(example_indices[index].item())
+        result["example_index"] = int(example_indices[index].item()) if example_indices is not None else index
         results.append(result)
     return results, summarize_metrics(results)
